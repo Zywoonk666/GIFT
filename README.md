@@ -56,15 +56,4 @@ bash run_experiments.sh
 
 The script automates few-shot testing (e.g. on `bace`) leveraging the GIFT custom architecture. All evaluation results will be cached as CSV files in the `./cache/` directory.
 
-## Citation (Base Model)
 
-Since GIFT is formulated upon the GIMLET model, please consider citing their original paper if you find the base framework helpful:
-```bibtex
-@article{zhao2024gimlet,
-  title={Gimlet: A unified graph-text model for instruction-based molecule zero-shot learning},
-  author={Zhao, Haiteng and Liu, Shengchao and Chang, Ma and Xu, Hannan and Fu, Jie and Deng, Zhihong and Kong, Lingpeng and Liu, Qi},
-  journal={Advances in Neural Information Processing Systems},
-  volume={36},
-  year={2024}
-}
-```
