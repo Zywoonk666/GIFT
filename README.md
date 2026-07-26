@@ -4,36 +4,42 @@ This is the codebase for **GIFT**, which is built and improved upon the GIMLET f
 
 ## Installation
 
-To run GIFT, please install the required dependencies using the script provided.
-Please note that the environment initialization script is for CUDA 11.1. If you are using a different version of CUDA, please adjust the package version in the script as necessary.
+The fixed environment targets Linux x86_64, Python 3.7, PyTorch 1.9, and
+CUDA 11.1. Create it with:
 
 ### Environment
 ```bash
-conda create -n env_gimlet python=3.7
-source activate env_gimlet
-
-pip3 install torch==1.9+cu111 torchaudio  -f https://download.pytorch.org/whl/cu111/torch_stable.html
-
-wget https://data.pyg.org/whl/torch-1.9.0%2Bcu111/torch_scatter-2.0.9-cp37-cp37m-linux_x86_64.whl
-pip install torch_scatter-2.0.9-cp37-cp37m-linux_x86_64.whl
-wget https://data.pyg.org/whl/torch-1.9.0%2Bcu111/torch_sparse-0.6.12-cp37-cp37m-linux_x86_64.whl
-pip install torch_sparse-0.6.12-cp37-cp37m-linux_x86_64.whl
-wget https://data.pyg.org/whl/torch-1.9.0%2Bcu111/torch_cluster-1.5.9-cp37-cp37m-linux_x86_64.whl
-pip install torch_cluster-1.5.9-cp37-cp37m-linux_x86_64.whl
-wget https://data.pyg.org/whl/torch-1.9.0%2Bcu111/torch_spline_conv-1.2.1-cp37-cp37m-linux_x86_64.whl
-pip install torch_spline_conv-1.2.1-cp37-cp37m-linux_x86_64.whl
-
-pip install torch_geometric==1.7.2
-
-git clone -b v4.28.1 https://github.com/huggingface/transformers
-cd transformers
-pip install --editable ./
-python setup.py build_ext --inplace
-cd ..
-
-pip install datasets evaluate ogb spacy tqdm sklearn SentencePiece lmdb tensorboardX==2.4.1 rdkit-pypi==2021.9.3 wandb networkx setuptools==59.5.0 multiprocess Cython plotly commentjson pandas boto3 chainer-chemistry subword-nmt pytorch_lightning==1.0 -U kaleido openai
-pip install dgl==0.7.2 -f https://data.dgl.ai/wheels/repo.html
+conda env create -f environment.yml
+conda activate env_gift
 ```
+
+### Pre-download Hugging Face Assets
+
+`run_experiments.sh` enables Hugging Face offline mode. On a clean machine,
+download the required model and tokenizer once while network access is
+available:
+
+```bash
+conda activate env_gift
+
+python - <<'PY'
+from huggingface_hub import snapshot_download
+from transformers import AutoTokenizer
+
+snapshot_download(
+    repo_id="haitengzhao/gimlet",
+    allow_patterns=["config.json", "generation_config.json", "pytorch_model.bin"],
+)
+AutoTokenizer.from_pretrained("t5-small")
+print("Hugging Face assets are ready for offline use.")
+PY
+```
+
+By default, these files are stored in `~/.cache/huggingface/`. The download
+must be performed for the same user that will run the experiment. After the
+cache is populated, no network connection is required by the experiment
+script. If the target machine has no network access, copy the populated
+Hugging Face cache from another machine before running.
 
 ## Dataset Download
 
@@ -55,5 +61,3 @@ bash run_experiments.sh
 ```
 
 The script automates few-shot testing (e.g. on `bace`) leveraging the GIFT custom architecture. All evaluation results will be cached as CSV files in the `./cache/` directory.
-
-

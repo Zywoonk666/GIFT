@@ -34,7 +34,7 @@ run_ablation() {
             --projector_blocks $proj_blocks \
             --projector_act $proj_act \
             --few_shot $few_shot_number \
-            --few_shot_fashion linear \
+            --few_shot_fashion innovation \
             --transformer_backbone gimlet \
             --model_name_or_path "haitengzhao/gimlet" \
             --tokenizer_name t5-small \
