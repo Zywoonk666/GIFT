@@ -76,6 +76,13 @@ def get_model(args,graph_args,tokenizer):
         model = LLM(model=args.model_name_or_path)
     else:
         raise ValueError("not supported model type")
+    if (
+        getattr(args, 'use_graph_expert', True)
+        and hasattr(model, 'encoder')
+        and hasattr(model.encoder, 'convert_to_graph_experts')
+    ):
+        model.encoder.convert_to_graph_experts()
+
     return model
 
 

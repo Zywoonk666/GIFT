@@ -88,7 +88,7 @@ parser.add_argument('--zero_shot',action='store_true')
 
 #about few-shot strategies
 parser.add_argument('--few_shot',type=int,default=None)
-parser.add_argument('--few_shot_fashion',type=str,default='finetune',choices=['finetune', 'linear','prompttune'])
+parser.add_argument('--few_shot_fashion',type=str,default='finetune',choices=['finetune', 'linear', 'innovation','prompttune'])
 parser.add_argument('--few_shot_prompt_fashion',type=str,default='traversal',choices=['traversal', 'max','max_abs'])
 
 #about saving strategies
@@ -100,6 +100,8 @@ parser.add_argument("--use_projector", type=lambda x: (str(x).lower() == 'true')
 parser.add_argument("--use_ot_alignment", type=lambda x: (str(x).lower() == 'true'), default=False, help="Whether to use Optimal Transport (Sinkhorn) based cross-modal alignment")
 parser.add_argument("--use_progressive_mask", type=lambda x: (str(x).lower() == 'true'), default=True, help="Whether to use progressive decoupling mask")
 parser.add_argument("--use_graph_expert", type=lambda x: (str(x).lower() == 'true'), default=True, help="Whether to use independent QKV and FFN for graph")
+parser.add_argument("--graph_expert_lr_scale", type=float, default=0.01,
+                    help="LR scale for graph-only QKV/FFN parameters in innovation tuning")
 parser.add_argument("--projector_dropout", type=float, default=0.1, 
                     help="Dropout rate for the ResMLP projector blocks")
 
@@ -203,27 +205,65 @@ def get_linear_mask_ratio(epoch, total_epochs=60, start_ratio=1.0, end_ratio=1.0
 def downstream_task_by_transform(model,train_loader,val_loader,test_loader,prompt=''):
     #reload the model parameter
     model = get_model(args, graph_args, tokenizer)
-    model.load_state_dict(torch.load("gimlet_dual_route_weights.bin", map_location=model.device), strict=False)
     model.to(device)
     if args.few_shot_fashion == 'finetune':
         model_param_group = [{'params': model.parameters()}]
     elif args.few_shot_fashion == 'linear':  #Only linear weight
+        model.requires_grad_(False)
         if args.transformer_backbone=='kvplm':
-            model_param_group =[{'params': model.cls.predictions.decoder.parameters()}]
+            trainable_params = list(model.cls.predictions.decoder.parameters())
         elif args.transformer_backbone=='momu':
-            model_param_group = [{'params': model.text_proj_head[2].parameters()}]
+            trainable_params = list(model.text_proj_head[2].parameters())
         else:
             trainable_params = list(model.lm_head.parameters())
             for name, param in model.named_parameters():
                 if 'graph_projector' in name or 'full_attn_res' in name:
                     trainable_params.append(param)
-                
-            model_param_group = [{'params': trainable_params}]
-            #model_param_group = [{'params': model.lm_head.parameters()}]
+        for param in trainable_params:
+            param.requires_grad_(True)
+        model_param_group = [{'params': trainable_params}]
+        #model_param_group = [{'params': model.lm_head.parameters()}]
+    elif args.few_shot_fashion == 'innovation':
+        model.requires_grad_(False)
+        head_params = list(model.lm_head.parameters())
+        projector_params = []
+        graph_expert_params = []
+        if args.use_projector:
+            projector_params = list(model.encoder.graph_projector.parameters())
+        if args.use_graph_expert:
+            for name, param in model.named_parameters():
+                if (
+                    'attention.q_graph' in name
+                    or 'attention.k_graph' in name
+                    or 'attention.v_graph' in name
+                    or 'ffn.graph_ffn' in name
+                ):
+                    graph_expert_params.append(param)
+        trainable_params = head_params + projector_params + graph_expert_params
+        for param in trainable_params:
+            param.requires_grad_(True)
+        model_param_group = [
+            {'params': head_params, 'lr': args.lr},
+            {'params': projector_params, 'lr': args.lr},
+            {'params': graph_expert_params, 'lr': args.lr * args.graph_expert_lr_scale},
+        ]
+        model_param_group = [group for group in model_param_group if len(group['params']) > 0]
+        print('Innovation tuning parameters: head={}, projector={}, graph_expert={}, graph_expert_lr={}'.format(
+            sum(param.numel() for param in head_params),
+            sum(param.numel() for param in projector_params),
+            sum(param.numel() for param in graph_expert_params),
+            args.lr * args.graph_expert_lr_scale
+        ))
     elif args.few_shot_fashion == 'prompttune':
+        model.requires_grad_(False)
+        trainable_params = list(model.encoder.embed_tokens.parameters())
+        for param in trainable_params:
+            param.requires_grad_(True)
         model_param_group = [{'params': model.encoder.embed_tokens.parameters()}]
     else:
         raise ValueError("not supported few shot fashion")
+    trainable_count = sum(param.numel() for param in model.parameters() if param.requires_grad)
+    print('Trainable parameters: {}'.format(trainable_count))
     optimizer = optim.Adam(model_param_group, lr=args.lr,
                         weight_decay=args.decay)
 
@@ -749,7 +789,3 @@ if __name__ == '__main__':
 
                 downstream_task_by_transform(model, train_loader, val_loader, test_loader,
                                              prompt)
-
-
-
-

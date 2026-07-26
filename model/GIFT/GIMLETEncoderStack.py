@@ -173,23 +173,10 @@ class GIMLETEncoderStack(T5Stack):
         # Disable progressive decoupling, reduce mask impact
         self.use_progressive_mask = getattr(graph_args, "use_progressive_mask", False)
 
-        #Whether to use independent graph feature QKV and FFN expert layers
-        self.use_graph_expert = getattr(self.graph_encoder.args, "use_graph_expert", True)
-
-        if self.use_graph_expert:
-            d_model = self.config.d_model
-            num_heads = self.config.num_heads
-            d_ff = self.config.d_ff
-            dropout_rate = self.config.dropout_rate
-
-            for i in range(len(self.block)):
-                # Only replace the core content of encoder layer
-                self.block[i]= GraphExpertEncoderLayer(
-                    d_model=d_model,
-                    num_heads=num_heads,
-                    d_ff=d_ff,
-                    dropout_rate=dropout_rate
-                )
+        # Keep the original T5 blocks during from_pretrained() so official
+        # weights can load first. get_model() converts them after loading.
+        self.requested_use_graph_expert = getattr(self.graph_encoder.args, "use_graph_expert", True)
+        self.use_graph_expert = False
     
         self.use_projector = getattr(graph_args, 'use_projector', True)
         self.projector_dropout = getattr(graph_args, 'projector_dropout', 0.1)
@@ -201,6 +188,51 @@ class GIMLETEncoderStack(T5Stack):
             activation=act_fn,
             dropout=self.projector_dropout
         )
+
+    def convert_to_graph_experts(self):
+        """Replace T5 encoder blocks with graph experts after copying weights."""
+        if self.use_graph_expert:
+            return
+
+        for i, source_block in enumerate(self.block):
+            source_attention = source_block.layer[0].SelfAttention
+            source_ffn = source_block.layer[1].DenseReluDense
+            expert_block = GraphExpertEncoderLayer(
+                d_model=self.config.d_model,
+                num_heads=self.config.num_heads,
+                d_ff=self.config.d_ff,
+                dropout_rate=self.config.dropout_rate,
+            ).to(
+                device=source_attention.q.weight.device,
+                dtype=source_attention.q.weight.dtype,
+            )
+
+            with torch.no_grad():
+                for target in (expert_block.attention.q_text, expert_block.attention.q_graph):
+                    target.weight.copy_(source_attention.q.weight)
+                for target in (expert_block.attention.k_text, expert_block.attention.k_graph):
+                    target.weight.copy_(source_attention.k.weight)
+                for target in (expert_block.attention.v_text, expert_block.attention.v_graph):
+                    target.weight.copy_(source_attention.v.weight)
+                expert_block.attention.o_proj.weight.copy_(source_attention.o.weight)
+                expert_block.layer_norm_1.weight.copy_(source_block.layer[0].layer_norm.weight)
+
+                if hasattr(source_ffn, "wi"):
+                    source_wi = source_ffn.wi
+                elif hasattr(source_ffn, "wi_0"):
+                    source_wi = source_ffn.wi_0
+                else:
+                    raise AttributeError("Unsupported T5 FFN: missing wi/wi_0 weight")
+                for target in (expert_block.ffn.text_ffn[0], expert_block.ffn.graph_ffn[0]):
+                    target.weight.copy_(source_wi.weight)
+                for target in (expert_block.ffn.text_ffn[3], expert_block.ffn.graph_ffn[3]):
+                    target.weight.copy_(source_ffn.wo.weight)
+                expert_block.layer_norm_2.weight.copy_(source_block.layer[1].layer_norm.weight)
+
+            self.block[i] = expert_block
+
+        self.use_graph_expert = True
+        self.graph_encoder.args.use_graph_expert = True
     
     
     def forward(
@@ -972,6 +1004,4 @@ class GinT5EncoderStack(T5Stack):
 
 GraphT5EncoderStack_dict={'gint5':GinT5EncoderStack,
                        'gimlet':GIMLETEncoderStack}
-
-
 
